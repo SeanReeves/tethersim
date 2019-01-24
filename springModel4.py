@@ -1,15 +1,17 @@
-import numpy as np
-import scipy as sp
+import matplotlib
 import matplotlib.pyplot as plt
-from scipy.integrate import odeint
 
-# parameters
+import scipy
+from scipy import integrate
+import numpy as np
+
+# # parameters
 WIRE_RADIUS = 0.6 * 10 ** -3  # WIRE RADIUS (M)
 L = 100  # WIRE LENGTH (M)
 E = 128 * 10 ** 9  # YOUNGS MODULUS (PA)
 RHO = 8960  # DENSITY KG/M3
 MU = RHO * np.pi * WIRE_RADIUS ** 2  # LINEAR DENSITY (KG/M)
-N = 20  # NUM OF ELEMENTS
+N = 10  # NUM OF ELEMENTS
 DELTAX = L / N  # CONNECTION LENGTH
 ELEMENT_MASS = np.ones(N) * MU * DELTAX  # ARRAY OF MASSES OF EACH POINT OF SYSTEM
 ELEMENT_MASS[0] = MU * DELTAX  # MASS OF SATELLITE
@@ -17,7 +19,7 @@ ELEMENT_MASS[-1] = MU * DELTAX  # MASS OF ENDMASS
 DELTA_T = 0.1  # TIMESTEP
 K = (E * np.pi * (WIRE_RADIUS ** 2)) / DELTAX  # SPRING CONSTANT OF EACH CONNECTION
 C = 3 * N  # DAMPING OF EACH CONNECTION
-NUM_TIMESTEPS = 2000  # DURATION OF SIMULATION
+NUM_TIMESTEPS = 10  # DURATION OF SIMULATION
 TENSIONS = []  # A list of tensions on all points on the tehter at checked times
 
 
@@ -25,34 +27,23 @@ TENSIONS = []  # A list of tensions on all points on the tehter at checked times
 
 
 # physics equations
-def spring_accel(A, B, DELTAX, ELEMENT_MASS, i):  # Restoring Spring Force
-    elementDistance = np.linalg.norm(A - B)
-    F = K * (elementDistance - DELTAX)
-    FBA = F * (A - B) / elementDistance
-    if elementDistance - DELTAX > 0:  # Modelling the tether as a string, in which case it's never in compression
 
-        Aacceleration = -FBA / ELEMENT_MASS[i]
-        Bacceleration = FBA / ELEMENT_MASS[i + 1]
-    else:
-        Aacceleration = 0  # No compressive forces
-        Bacceleration = 0
-    #         Aacceleration = -FBA / element_mass[i]
-    #         Bacceleration = FBA / element_mass[i+1]
-
-    return [Aacceleration, Bacceleration]
-
-
-def damp_accel(Ax, Bx, Av, Bv, C, ELEMENT_MASS, i):
+def int_acc(Ax, Bx, Av, Bv, C, ELEMENT_MASS, i):
     AxBx = Bx - Ax
+    AxBxnorm = np.linalg.norm(Ax - Bx)
     AvBv = Bv - Av
-    AxBx_hat = AxBx / np.linalg.norm(AxBx)
+    AxBx_hat = Ax-Bx / AxBxnorm
     vprojection = np.dot(AvBv, AxBx_hat) * AxBx_hat
     FBA = -C * vprojection
     Aacceleration = -FBA / ELEMENT_MASS[i]
     Bacceleration = FBA / ELEMENT_MASS[i + 1]
+    if AxBxnorm - DELTAX > 0:  # Modelling the tether as a string, in which case it's never in compression
+        F = K * (AxBx - DELTAX)
+        FBA = F * AxBx_hat
+        Aacceleration += -FBA / ELEMENT_MASS[i]
+        Bacceleration += FBA / ELEMENT_MASS[i + 1]
 
     return [Aacceleration, Bacceleration]
-
 
 def ext_acc(A):
     return [0, -9.81, 0]
@@ -79,24 +70,16 @@ def check_energy(ELEMENT_MASS, ELEMENT_VELOCITIES, ELEMENT_POSITIONS, DELTAX, K)
 
 # SIMULATION EQUATIONS
 # Fuctions to apply the physics along the length of the tether
-def damping_accelerations(x, v, C, ELEMENT_MASS):
+def internal_accelerations(x, v, C, ELEMENT_MASS):
     a = np.zeros((N, 3))
     for i in range(N - 1):
-        newa = damp_accel(x[i, :], x[i + 1, :], v[i, :], v[i + 1, :], C, ELEMENT_MASS, i)
+        newa = int_acc(x[i, :], x[i + 1, :], v[i, :], v[i + 1, :], C, ELEMENT_MASS, i)
+
         a[i] = a[i] + newa[0]
         a[i + 1] = a[i + 1] + newa[1]
 
     return a
 
-
-def spring_accelerations(x, DELTAX, ELEMENT_MASS):
-    a = np.zeros((N, 3))
-    for i in range(N - 1):
-        newa = spring_accel(x[i, :], x[i + 1, :], DELTAX, ELEMENT_MASS, i)
-        a[i] = a[i] + newa[0]
-        a[i + 1] = a[i + 1] + newa[1]
-
-    return a
 
 
 def external_accelerations(x):  # At the moment this is just gravity for testing purposes
@@ -125,8 +108,7 @@ def diff_eq(t, y):
         vflat[i] = 0
 
     v = vflat.reshape(N, 3)
-    VDot = (damping_accelerations(x, v, C, ELEMENT_MASS) +
-            spring_accelerations(x, DELTAX, ELEMENT_MASS, ) +
+    VDot = (internal_accelerations(x, v, C, ELEMENT_MASS) +
             external_accelerations(x))
     derv = np.append(vflat, VDot.reshape(3 * N))
 
@@ -169,7 +151,7 @@ FLAT_ELEMENT_VELOCITIES = ELEMENT_VELOCITIES.reshape(3 * N)
 for i in range(NUM_TIMESTEPS + 1):
     Y = np.append(FLAT_ELEMENT_POSITIONS, FLAT_ELEMENT_VELOCITIES)
     a_t = (0, DELTA_T)
-    asol = sp.integrate.solve_ivp(diff_eq, a_t, Y, vectorized=True, method='RK45')
+    asol = scipy.integrate.solve_ivp(diff_eq, a_t, Y, vectorized=True, method='RK45')
 
     finsol = asol.y[:, -1]
     FLAT_ELEMENT_POSITIONS = finsol[0:(3 * N)]
