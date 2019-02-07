@@ -11,18 +11,20 @@ WIRE_RADIUS = 0.6 * 10 ** -3  # WIRE RADIUS (M)
 L = 100  # WIRE LENGTH (M)
 E = 128 * 10 ** 9  # YOUNGS MODULUS (PA)
 RHO = 8960  # DENSITY KG/M3
+
 MU = RHO * np.pi * WIRE_RADIUS ** 2  # LINEAR DENSITY (KG/M)
-N = 20  # NUM OF ELEMENTS
+print(MU)
+N = 50  # NUM OF ELEMENTS
 DELTAX = L / N  # CONNECTION LENGTH
 ELEMENT_MASS = np.ones(N) * MU * DELTAX  # ARRAY OF MASSES OF EACH POINT OF SYSTEM
 ELEMENT_MASS[0] = MU * DELTAX  # MASS OF SATELLITE
-ELEMENT_MASS[-1] = MU * DELTAX  # MASS OF ENDMASS
+ELEMENT_MASS[-1] = 100 #MU * DELTAX  # MASS OF ENDMASS
 DELTA_T = 0.01  # TIMESTEP
 K = (E * np.pi * (WIRE_RADIUS ** 2)) / DELTAX  # SPRING CONSTANT OF EACH CONNECTION
 C = 3 * N  # DAMPING OF EACH CONNECTION
 NUM_TIMESTEPS = 10000 # DURATION OF SIMULATION
 TENSIONS = []  # A list of tensions on all points on the tehter at checked times
-THETA = 2* np.pi * 15 /360
+THETA = 2* np.pi * 10 /360
 position_history = []  # particle history
 tension_history = []
 # -----------------------------------------
@@ -40,10 +42,6 @@ def ext_acc(A):
 # SIMULATION EQUATIONS
 # Fuctions to apply the physics along the length of the tether
 def internal_accelerations(x, v, C, ELEMENT_MASS, do_tension_check= False):
-
-
-
-
 
     # damp
     AxBx = x[1:N, :] - x[:N-1, :]
@@ -94,16 +92,17 @@ def external_accelerations(x):  # At the moment this is just gravity for testing
 def diff_eq(t, y):
     """Takes input of Y, a 1D array of all position and velocity components appended,
     and outputs the derivatives of these components"""
-    x = y[:3 * N]
-    x = x.reshape(N, 3)
-    vflat = y[3 * N:]
+    x_flat = y[:3 * N]
+    x = x_flat.reshape(N, 3)
+    v_flat = y[3 * N:]
     for i in range(3):
-        vflat[i] = 0
+        v_flat[i] = 0
 
-    v = vflat.reshape(N, 3)
-    VDot = (internal_accelerations(x, v, C, ELEMENT_MASS) +
+    v = v_flat.reshape(N, 3)
+    a = (internal_accelerations(x, v, C, ELEMENT_MASS) +
             external_accelerations(x))
-    derv = np.append(vflat, VDot.reshape(3 * N))
+    a_flat = a.reshape(3 * N)
+    derv = np.append(v_flat, a_flat)
 
     return [derv]
 
@@ -135,8 +134,9 @@ for i in range(N):
 
 # creating 1 dimensional position and velocity arrays
 FLAT_ELEMENT_POSITIONS = ELEMENT_POSITIONS.reshape(3 * N)
+print(FLAT_ELEMENT_POSITIONS)
 FLAT_ELEMENT_VELOCITIES = ELEMENT_VELOCITIES.reshape(3 * N)
-
+print(FLAT_ELEMENT_VELOCITIES)
 for i in range(NUM_TIMESTEPS + 1):
     Y = np.append(FLAT_ELEMENT_POSITIONS, FLAT_ELEMENT_VELOCITIES)
     a_t = (0, DELTA_T)
@@ -147,7 +147,7 @@ for i in range(NUM_TIMESTEPS + 1):
     ELEMENT_POSITIONS = FLAT_ELEMENT_POSITIONS.reshape(N, 3)
     FLAT_ELEMENT_VELOCITIES = finsol[3 * N:]
     # ELEMENT_VELOCITIES = FLAT_ELEMENT_VELOCITIES.reshape(N, 3)
-    if i % 1 == 0:
+    if i % 10 == 0:
         position_history = position_history + [ELEMENT_POSITIONS]
         #tension_history = tension_history + [internal_accelerations(ELEMENT_POSITIONS, ELEMENT_VELOCITIES, C ,ELEMENT_MASS, do_tension_check= True )]
 
@@ -163,13 +163,16 @@ for i in range(NUM_TIMESTEPS + 1):
 #
 #
 #
+
+
 fig = plt.figure(figsize=(20, 20))
 ax1 = fig.add_subplot(111)
 ax1.set_title("Positions")
-ax1.set_ylim([-100, 100])
-ax1.set_xlim([-100, 100])
-positions, = ax1.plot([], [])
-animation_object = animation.FuncAnimation(fig, animate_history, frames=len(position_history), interval=10, blit=True)
+ax1.set_ylim([-100, 0])
+ax1.set_xlim([-50, 50])
+positions, = ax1.plot([], [],  'x-')
+animation_object = animation.FuncAnimation(fig, animate_history, frames=len(position_history), interval=1, blit=True)
+# animation_object.save('MrTether.html', writer='imagemagick', fps=60)
 # ax2 = fig.add_subplot(212)
 # ax2.set_title("Tensions")
 # ax2.set_ylim([-12.5, 2.5])

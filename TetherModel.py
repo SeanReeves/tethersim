@@ -1,179 +1,153 @@
-import matplotlib
-import matplotlib.pyplot as plt
-
-import scipy
-from scipy import integrate
 import numpy as np
-import matplotlib.animation as animation
-
-# # parameters
-WIRE_RADIUS = 0.6 * 10 ** -3  # WIRE RADIUS (M)
-L = 100  # WIRE LENGTH (M)
-E = 128 * 10 ** 9  # YOUNGS MODULUS (PA)
-RHO = 8960  # DENSITY KG/M3
-MU = RHO * np.pi * WIRE_RADIUS ** 2  # LINEAR DENSITY (KG/M)
-N = 20  # NUM OF ELEMENTS
-DELTAX = L / N  # CONNECTION LENGTH
-ELEMENT_MASS = np.ones(N) * MU * DELTAX  # ARRAY OF MASSES OF EACH POINT OF SYSTEM
-ELEMENT_MASS[0] = MU * DELTAX  # MASS OF SATELLITE
-ELEMENT_MASS[-1] = MU * DELTAX  # MASS OF ENDMASS
-DELTA_T = 0.01  # TIMESTEP
-K = (E * np.pi * (WIRE_RADIUS ** 2)) / DELTAX  # SPRING CONSTANT OF EACH CONNECTION
-C = 3 * N  # DAMPING OF EACH CONNECTION
-NUM_TIMESTEPS = 10000 # DURATION OF SIMULATION
-TENSIONS = []  # A list of tensions on all points on the tehter at checked times
-THETA = 2* np.pi * 15 /360
-position_history = []  # particle history
-tension_history = []
+import scipy
+import sys
+from scipy import integrate
+from functools import partial
 # -----------------------------------------
+class Tether:
+    def __init__(self, length, linear_density, spring_constant, damping_constant, number_of_elements, mass_0, mass_L,
+                 positions, velocities, forces):
+        self.length = length
+        self.linear_density = linear_density
+        self.spring_constant = spring_constant
+        self.damping_constant = damping_constant
+        self.number_of_elements = number_of_elements
+        self.positions = positions
+        self.velocities = velocities
+        self.accelerations = np.zeros((number_of_elements, 3))
+        self.delta_x = self.length / self.number_of_elements
+        self.masses = np.zeros(number_of_elements) + linear_density * self.delta_x
+        self.masses[0] = mass_0
+        self.masses[-1] = mass_L
+        self.delta_t = 0
+        self.tensions = np.zeros(number_of_elements - 1)
+        self.fab = np.zeros(number_of_elements - 1)
+        self.fba = np.zeros(number_of_elements - 1)
+        self.positions_history = []
+        self.tension_history = []
+        self.forces = forces
+
+    def internal_accelerations(self, x, v):
+        # damp
+        AxBx = x[1:self.number_of_elements, :] - x[:self.number_of_elements - 1, :]
+        AxBxnorm = np.linalg.norm(AxBx, axis=1)[np.newaxis].T
+        AvBv = v[1:self.number_of_elements, :] - v[:self.number_of_elements - 1, :]
+        AxBx_hat = AxBx / AxBxnorm
+
+        AvBv_dot_AxBx_hat = (AvBv * AxBx_hat).sum(axis=1)[np.newaxis].T
+        vprojection = AvBv_dot_AxBx_hat * AxBx_hat
+
+        self.fba = -self.damping_constant * vprojection
+
+        # spring
+        indices = np.arange(self.number_of_elements - 1)[np.newaxis].T
+        mask = indices[AxBxnorm - self.delta_x > 0]
+        F = self.spring_constant * (AxBxnorm - self.delta_x)
+        self.fab = F * AxBx_hat
 
 
-# physics equations
 
-def ext_acc(A):
-    return [0, -9.81, 0]
+        Aacceleration = -self.fba / self.masses[:self.number_of_elements - 1][np.newaxis].T
+        Bacceleration = self.fba / self.masses[1:self.number_of_elements][np.newaxis].T
 
+        Aacceleration_ = self.fab / self.masses[:self.number_of_elements - 1][np.newaxis].T
+        Bacceleration_ = -self.fab / self.masses[1:self.number_of_elements][np.newaxis].T
 
-# ----------------------------------------
+        a = np.zeros((self.number_of_elements, 3))
+        a[:self.number_of_elements - 1, :] += Aacceleration
+        a[1:self.number_of_elements, :] += Bacceleration
 
+        a[:self.number_of_elements - 1, :][mask] += Aacceleration_[mask]
+        a[1:self.number_of_elements, :][mask] += Bacceleration_[mask]
 
-# SIMULATION EQUATIONS
-# Fuctions to apply the physics along the length of the tether
-def internal_accelerations(x, v, C, ELEMENT_MASS, do_tension_check= False):
-
-
-
-
-
-    # damp
-    AxBx = x[1:N, :] - x[:N-1, :]
-    AxBxnorm = np.linalg.norm(AxBx, axis=1)[np.newaxis].T
-    AvBv = v[1:N, :] - v[:N-1, :]
-    AxBx_hat = AxBx / AxBxnorm
-
-    AvBv_dot_AxBx_hat = (AvBv*AxBx_hat).sum(axis=1)[np.newaxis].T
-    vprojection = AvBv_dot_AxBx_hat * AxBx_hat
-
-    FBA = -C * vprojection
-
-
-
-    # spring
-    indices = np.arange(N-1)[np.newaxis].T
-    mask = indices[AxBxnorm - DELTAX > 0]
-    F = K * (AxBxnorm - DELTAX)
-    FAB = F * AxBx_hat
-
-    if do_tension_check:
-        a = np.linalg.norm(FBA + FAB, axis =1)
         return a
-        # pass
-    Aacceleration = -FBA / ELEMENT_MASS[:N - 1][np.newaxis].T
-    Bacceleration = FBA / ELEMENT_MASS[1:N][np.newaxis].T
 
-    Aacceleration_ = FAB / ELEMENT_MASS[:N - 1][np.newaxis].T
-    Bacceleration_ = -FAB / ELEMENT_MASS[1:N][np.newaxis].T
+    def tension_check(self):
+        t = self.fba + self.fab
+        t = np.linalg.norm(t)
+        return t
 
-    a = np.zeros((N, 3))
-    a[:N - 1, :] += Aacceleration
-    a[1:N, :] += Bacceleration
+    def external_accelerations(self):
+        a = self.forces.reshape(self.number_of_elements,3)*self.delta_x / self.masses
+        a[:3] = a[:3] / 2
+        a[-3:] = a[-3:] / 2
+        return a
 
-    a[:N - 1, :][mask] += Aacceleration_[mask]
-    a[1:N, :][mask] += Bacceleration_[mask]
-    return a
+    def diff_eq(self, t, y):
+        """Takes input of Y, a 1D array of all position and velocity components appended,
+        and outputs the derivatives of these components"""
+        x_flat = y[:3 * self.number_of_elements]
+        x = x_flat.reshape(self.number_of_elements, 3)
+        v_flat = y[3 * self.number_of_elements:]
+        for i in range(3):
+            v_flat[i] = 0
+
+        v = v_flat.reshape(self.number_of_elements, 3)
+        a = (self.internal_accelerations(x, v) + self.external_accelerations())
+        a_flat = a.reshape(3 * self.number_of_elements)
+        derv = np.append(v_flat, a_flat)
+
+        return [derv]
+
+    def update_step(self):
+       try:
+            Y = np.append(self.positions, self.velocities)
+            a_t = (0, self.delta_t)
+            asol = scipy.integrate.solve_ivp(self.diff_eq, a_t, Y, vectorized=True, method='RK45')
+            finsol = asol.y[:, -1]
+            self.positions = finsol[0:(3 * self.number_of_elements)]
+            self.velocities = finsol[3 * self.number_of_elements:]
+       except as err:
+           stepped_ok = 0
+           self.velocities = 0
+           self.tensions = 0
+           self.tension = ['Unexpected Error:', sys.exc_info()[0] ]
+       else:
+            stepped_ok = 1
+            self.tensions = self.tension_check()
+
+        return stepped_ok, self.positions, self.velocities, self.tensions
+
+num_input_lines = 2
+
+for i, line in enumerate(sys.stdin):
+    if i < 9:
+        if i == 0:
+            length = float(line)
+        elif i == 1:
+            linear_density = float(line)
+        elif i == 2:
+            spring_constant = float(line)
+        elif i == 3:
+            damping_constant = float(line)
+        elif i == 4:
+            num_elements = int(line)
+        elif i == 5:
+            mass_0 = float(line)
+        elif i == 6:
+            mass_L = float(line)
+        elif i == 7:
+            positions = np.array([float(x) for x in line.split(',')])
+        elif i == 8:
+            velocities = np.array([float(x) for x in line.split(',')])
+
+    else:
+        if i % 2 == 1:
+            time_step = int(line)
+            if time_step == -1:
+                break
+        else:
+            forces = np.array([float(x) for x in line.split(',')])
+            tether_object = Tether(length, linear_density, spring_constant*num_elements, damping_constant*num_elements, num_elements, mass_0,
+                                   mass_L, positions, velocities, forces)
+            stepped_ok, positions, velocities, tensions = tether_object.update_step()
+            if stepped_ok == 1:
+                print(stepped_ok)
+                print(",".join([str(x) for x in positions]))
+                print(",".join([str(x) for x in velocities]))
+                print(",".join([str(x) for x in tensions]))
 
 
 
-def external_accelerations(x):  # At the moment this is just gravity for testing purposes
-    # Will be Handeled by James' Program
-    a = np.ones((N, 3)) * np.array([0, -9.81, 0])
-    return a
 
 
-
-def diff_eq(t, y):
-    """Takes input of Y, a 1D array of all position and velocity components appended,
-    and outputs the derivatives of these components"""
-    x = y[:3 * N]
-    x = x.reshape(N, 3)
-    vflat = y[3 * N:]
-    for i in range(3):
-        vflat[i] = 0
-
-    v = vflat.reshape(N, 3)
-    VDot = (internal_accelerations(x, v, C, ELEMENT_MASS) +
-            external_accelerations(x))
-    derv = np.append(vflat, VDot.reshape(3 * N))
-
-    return [derv]
-
-# ---------------------
-def animate_position_history(i):
-    positions.set_data(position_history[i][:,0], position_history[i][:,1])
-    return positions,
-def animate_history(i):
-    positions.set_data(position_history[i][:, 0], position_history[i][:, 1])
-   # tensions.set_data(np.arange(N-1)*DELTAX, tension_history[i] )
-    return positions,# tensions,
-# ----------------------------------------
-# Initial Conditions
-
-# initialise arrays to store
-
-# energy_history = []
-ELEMENT_POSITIONS = np.zeros((N, 3))
-ELEMENT_VELOCITIES = np.zeros((N, 3))
-
-# initial conditions
-for i in range(N):
-    position_vector = [DELTAX * i *np.sin(THETA),-DELTAX * i *np.cos(THETA) , 0]  # where each point sits
-    ELEMENT_POSITIONS[i, :] = position_vector  # an array stores the entire position of the system
-
-
-# plt.plot(ELEMENT_POSITIONS[:, 0], ELEMENT_POSITIONS[:, 1])
-# plt.show()
-
-# creating 1 dimensional position and velocity arrays
-FLAT_ELEMENT_POSITIONS = ELEMENT_POSITIONS.reshape(3 * N)
-FLAT_ELEMENT_VELOCITIES = ELEMENT_VELOCITIES.reshape(3 * N)
-
-for i in range(NUM_TIMESTEPS + 1):
-    Y = np.append(FLAT_ELEMENT_POSITIONS, FLAT_ELEMENT_VELOCITIES)
-    a_t = (0, DELTA_T)
-    asol = scipy.integrate.solve_ivp(diff_eq, a_t, Y, vectorized=True, method='RK45')
-
-    finsol = asol.y[:, -1]
-    FLAT_ELEMENT_POSITIONS = finsol[0:(3 * N)]
-    ELEMENT_POSITIONS = FLAT_ELEMENT_POSITIONS.reshape(N, 3)
-    FLAT_ELEMENT_VELOCITIES = finsol[3 * N:]
-    # ELEMENT_VELOCITIES = FLAT_ELEMENT_VELOCITIES.reshape(N, 3)
-    if i % 1 == 0:
-        position_history = position_history + [ELEMENT_POSITIONS]
-        #tension_history = tension_history + [internal_accelerations(ELEMENT_POSITIONS, ELEMENT_VELOCITIES, C ,ELEMENT_MASS, do_tension_check= True )]
-
-    print(i)
-
-    # plt.plot(ELEMENT_POSITIONS[:, 0], ELEMENT_POSITIONS[:, 1])
-    # axes = plt.gca()
-    # axes.set_ylim([-100, 100])
-    # axes.set_xlim([-100, 100])
-    # plt.show()
-
-#
-#
-#
-#
-fig = plt.figure(figsize=(20, 20))
-ax1 = fig.add_subplot(111)
-ax1.set_title("Positions")
-ax1.set_ylim([-100, 100])
-ax1.set_xlim([-100, 100])
-positions, = ax1.plot([], [])
-animation_object = animation.FuncAnimation(fig, animate_history, frames=len(position_history), interval=10, blit=True)
-# ax2 = fig.add_subplot(212)
-# ax2.set_title("Tensions")
-# ax2.set_ylim([-12.5, 2.5])
-# ax2.set_xlim([0, 10])
-# tensions, = ax2.plot([], [])
-#
-plt.show()
